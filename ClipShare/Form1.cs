@@ -4,13 +4,11 @@ using System.Drawing;
 using System.IO;
 using System.Net;
 using System.Windows.Forms;
-using Lidgren.Network;
 using System.Threading;
 using System.Runtime.Serialization.Formatters.Binary;
-using System.Threading.Tasks;
-using System.Net.Sockets;
 using System.Collections.Specialized;
 using System.Collections.ObjectModel;
+using Arke;
 
 namespace ClipShare
 {
@@ -114,11 +112,9 @@ namespace ClipShare
 
         const string DEFAULT_SERVER = "localhost";
         const int DEFAULT_PORT = 6078;
-
-        NetPeerConfiguration snpc;
-        NetPeerConfiguration cnpc;
-        NetServer server; // Receives data
-        NetClient client; // Sends data
+        
+        ArkeTcpServer server; // Receives data
+        ArkeTcpClient client; // Sends data
 
         public ObservableDictionary<string, Peer> peerDict = new ObservableDictionary<string, Peer>();
         public int peerTimeout = 15;
@@ -132,145 +128,68 @@ namespace ClipShare
         
         public void Start()
         {
-            snpc = new NetPeerConfiguration("ClipShare");
-            snpc.Port = DEFAULT_PORT;
-            snpc.EnableMessageType(NetIncomingMessageType.DiscoveryRequest);
-            snpc.SetMessageTypeEnabled(NetIncomingMessageType.UnconnectedData, true);
-
-            server = new NetServer(snpc);
-            server.Start();
-
-            cnpc = new NetPeerConfiguration("ClipShare");
-            cnpc.EnableMessageType(NetIncomingMessageType.DiscoveryResponse);
-
-            client = new NetClient(cnpc);
-            client.Start();
-
-            Task task = Task.Run(() =>
-            {
-                receiverThread = Thread.CurrentThread;
-
-                while (true)
-                {
-                    bool netAvailable = System.Net.NetworkInformation.NetworkInterface.GetIsNetworkAvailable();
-
-                    
-                    IPAddress localIP = null;
-                    try
-                    {
-                        using (Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, 0))
-                        {
-                            socket.Connect("8.8.8.8", 65530); // Reliant on Google still existing
-                            IPEndPoint endPoint = socket.LocalEndPoint as IPEndPoint;
-                            localIP = endPoint.Address;
-                        }
-                    }
-                    catch (Exception) {}
-                    
-
-                    if (netAvailable)
-                    {
-                        NetIncomingMessage msg = null;
-                        while ((msg = server.ReadMessage()) != null)
-                        {
-                            if (msg.SenderEndPoint.Address.ToString() != localIP.ToString())
-                            {
-
-                                switch (msg.MessageType)
-                                {
-                                    case NetIncomingMessageType.VerboseDebugMessage:
-                                    case NetIncomingMessageType.DebugMessage:
-                                    case NetIncomingMessageType.WarningMessage:
-                                    case NetIncomingMessageType.ErrorMessage:
-                                        Console.WriteLine(msg.ReadString());
-                                        break;
-                                    case NetIncomingMessageType.DiscoveryRequest:
-                                        NetOutgoingMessage response = server.CreateMessage();
-                                        response.Write(Environment.MachineName);
-                                        server.SendDiscoveryResponse(response, msg.SenderEndPoint);
-                                        break;
-                                    case NetIncomingMessageType.DiscoveryResponse:
-                                        ProcessDiscovResp(msg.SenderEndPoint, msg.ReadString());
-                                        break;
-                                    case NetIncomingMessageType.UnconnectedData:
-                                        ProcessData(msg.Data);
-                                        break;
-                                    default:
-                                        Console.WriteLine("Unhandled type: " + msg.MessageType);
-                                        break;
-                                }
-                            }
-                        }
-
-                        while ((msg = client.ReadMessage()) != null)
-                        {
-                            if (msg.SenderEndPoint.Address.ToString() != localIP.ToString())
-                            {
-
-                                switch (msg.MessageType)
-                                {
-                                    case NetIncomingMessageType.VerboseDebugMessage:
-                                    case NetIncomingMessageType.DebugMessage:
-                                    case NetIncomingMessageType.WarningMessage:
-                                    case NetIncomingMessageType.ErrorMessage:
-                                        Console.WriteLine(msg.ReadString());
-                                        break;
-                                    case NetIncomingMessageType.DiscoveryRequest:
-                                        NetOutgoingMessage response = server.CreateMessage();
-                                        response.Write(Environment.MachineName);
-                                        server.SendDiscoveryResponse(response, msg.SenderEndPoint);
-                                        break;
-                                    case NetIncomingMessageType.DiscoveryResponse:
-                                        ProcessDiscovResp(msg.SenderEndPoint, msg.ReadString());
-                                        break;
-                                    case NetIncomingMessageType.UnconnectedData:
-                                        ProcessData(msg.Data);
-                                        break;
-                                    default:
-                                        Console.WriteLine("Unhandled type: " + msg.MessageType);
-                                        break;
-                                }
-                            }
-                        }
-                    }
-                    else
-                    {
-                        Thread.Sleep(1); // Sleep to avoid excessive CPU usage
-                    }
-                }
-            });
+            client = new ArkeTcpClient();
+            
+            server = new ArkeTcpServer(DEFAULT_PORT);
+            server.MessageReceived += Server_MessageReceived;
+            server.StartListening();
 
             t.Elapsed += T_Elapsed;
             t.Interval = peerRefreshRate * 1000;
             t.Start();
         }
 
+        private void Server_MessageReceived(ArkeMessage message, ArkeTcpServerConnection connection)
+        {
+            var bf = new BinaryFormatter();
+            var s = new MemoryStream();
+            s.Write(message.GetContentAsBytes(), 0, message.GetContentAsBytes().Length);
+            s.Position = 0;
+            var data = bf.Deserialize(s);
+            s.SetLength(0);
+
+            if (data is ClipData) // Receive ClipData
+            {
+                (data as ClipData).ToClipboard();
+            }
+            else if (data is Peer) // Receive discovery
+            {
+                var peer = data as Peer;
+                lock (locker)
+                {
+                    if (peerDict.ContainsKey(peer.machineName))
+                    {
+                        peerDict[peer.machineName] = peer;
+                    }
+                    else
+                    {
+                        peerDict.Add(peer.machineName, peer);
+                    }
+                }
+            }
+            else if (data is string) // Receive error message
+            {
+                Console.WriteLine(data as string);
+            }
+            else // Send error message
+            {
+                bf.Serialize(s, "Unsupported data type");
+                connection.Send(new ArkeMessage(s.ToArray()));
+            }
+
+            s.Dispose();
+        }
+
         public void Stop()
         {
             t.Stop();
-            receiverThread.Abort();
-            server.Shutdown("");
-            client.Shutdown("");
+            server.StopListening();
         }
 
         private void T_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
         {
             CleanPeers();
             RefreshPeers();
-        }
-
-        [STAThread]
-        private void ProcessData(byte[] data)
-        {
-            var bf = new BinaryFormatter();
-            var s = new MemoryStream();
-            s.Write(data, 0, data.Length);
-            s.Position = 0;
-            var cd = bf.Deserialize(s) as ClipData; // Should be ClipData, typecast to confirm
-
-            if (cd == null) return; // Clearly not receiving ClipData, return
-
-            cd.ToClipboard();
         }
 
         private void ProcessDiscovResp(IPEndPoint endpoint, string machineName)
@@ -290,9 +209,9 @@ namespace ClipShare
 
         public void Send(IPEndPoint recipient, byte[] data)
         {
-            var msg = client.CreateMessage();
-            msg.Write(data);
-            client.SendUnconnectedMessage(msg, recipient);
+            ArkeMessage msg = new ArkeMessage(data);
+            client.Connect(recipient.Address, 1000);
+            client.Send(msg);
         }
 
         private void CleanPeers()
@@ -319,7 +238,9 @@ namespace ClipShare
 
         private void RefreshPeers()
         {
-            client.DiscoverLocalPeers(DEFAULT_PORT);
+            // TODO: Poll all IPs with self-configured Peer class
+            // Run as async tasks with callbacks to add Peer response?
+            // ^ Too much resource usage?
         }
     }
 
