@@ -54,14 +54,15 @@
             // 
             // ContextMenu_SendTo
             // 
+            this.ContextMenu_SendTo.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
             this.ContextMenu_SendTo.Name = "ContextMenu_SendTo";
-            this.ContextMenu_SendTo.Size = new System.Drawing.Size(152, 22);
+            this.ContextMenu_SendTo.Size = new System.Drawing.Size(123, 22);
             this.ContextMenu_SendTo.Text = "Send to...";
             // 
             // ContextMenu_Exit
             // 
             this.ContextMenu_Exit.Name = "ContextMenu_Exit";
-            this.ContextMenu_Exit.Size = new System.Drawing.Size(152, 22);
+            this.ContextMenu_Exit.Size = new System.Drawing.Size(123, 22);
             this.ContextMenu_Exit.Text = "Exit";
             this.ContextMenu_Exit.Click += new System.EventHandler(this.ContextMenu_Exit_Click);
             // 
