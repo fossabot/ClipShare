@@ -1,15 +1,9 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
-using System.Net;
 using System.Windows.Forms;
-using System.Threading;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.Collections.Specialized;
-using System.Collections.ObjectModel;
-using Arke;
-using System.Net.Sockets;
 using System.Threading.Tasks;
 
 namespace ClipShare
